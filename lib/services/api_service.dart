@@ -13,6 +13,10 @@ class ApiService {
   final String _cloudFunctionUrl = 'YOUR_CLOUD_FUNCTION_URL_HERE'; // TODO: Update this
 
   Future<Map<String, dynamic>> analyzeAudio(String filePath, {String? imagePath}) async {
+    if (_cloudFunctionUrl.contains('YOUR_CLOUD_FUNCTION_URL_HERE')) {
+      throw Exception('Configuration Error: Cloud Function URL not set. Please update lib/services/api_service.dart with your deployed function URL.');
+    }
+
     try {
       // 1. Upload to Firebase Storage
       final file = File(filePath);

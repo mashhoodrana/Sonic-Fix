@@ -91,7 +91,7 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
 
             # Generate Content
             response = client.models.generate_content(
-                model='gemini-2.0-flash-exp',
+                model='gemini-3-flash-preview',
                 contents=gemini_contents,
                 config=types.GenerateContentConfig(
                     response_mime_type='application/json'
@@ -119,7 +119,7 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
                 "file_path": file_path,
                 "diagnosis": diagnosis_json,
                 "timestamp": firestore.SERVER_TIMESTAMP,
-                "model": "gemini-2.0-flash-exp"
+                "model": "gemini-3-flash-preview"
             })
             
             # Return result
