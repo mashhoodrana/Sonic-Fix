@@ -73,7 +73,7 @@ class HomeScreen extends ConsumerWidget {
               if (!ref.read(recordingControllerProvider).isRecording && ref.read(recordingControllerProvider).path != null) {
                   try {
                     final result = await controller.analyze();
-                    ref.read(diagnosisResultProvider.notifier).state = result;
+                    ref.read(diagnosisResultProvider.notifier).setDiagnosis(result);
                     
                     if (result != null) {
                         showModalBottomSheet(

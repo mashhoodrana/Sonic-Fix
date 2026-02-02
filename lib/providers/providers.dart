@@ -26,30 +26,31 @@ class RecordingState {
 
 final cameraServiceProvider = Provider((ref) => CameraService());
 
-class RecordingController extends StateNotifier<RecordingState> {
-  final AudioService _audioService;
-  final ApiService _apiService;
-  final CameraService _cameraService;
-  final Ref _ref;
-
-  RecordingController(this._audioService, this._apiService, this._cameraService, this._ref) : super(RecordingState());
+class RecordingController extends Notifier<RecordingState> {
+  @override
+  RecordingState build() {
+    return RecordingState();
+  }
 
   Future<void> toggleRecording() async {
+    final audioService = ref.read(audioServiceProvider);
+    
     if (state.isRecording) {
-      final path = await _audioService.stopRecording();
+      final path = await audioService.stopRecording();
       state = state.copyWith(isRecording: false, path: path);
     } else {
-      await _audioService.startRecording();
+      await audioService.startRecording();
       state = state.copyWith(isRecording: true, path: null);
     }
   }
 
   Future<Map<String, dynamic>?> analyze({String? imagePath}) async {
     if (state.path == null) return null;
+    final apiService = ref.read(apiServiceProvider);
 
     state = state.copyWith(isProcessing: true);
     try {
-      final result = await _apiService.analyzeAudio(state.path!, imagePath: imagePath);
+      final result = await apiService.analyzeAudio(state.path!, imagePath: imagePath);
       return result;
     } catch (e) {
       rethrow;
@@ -59,27 +60,29 @@ class RecordingController extends StateNotifier<RecordingState> {
   }
 
   Future<void> refineWithPhoto() async {
-      final imagePath = await _cameraService.takePhoto();
+      final cameraService = ref.read(cameraServiceProvider);
+      final imagePath = await cameraService.takePhoto();
       if (imagePath != null) {
           try {
              final result = await analyze(imagePath: imagePath);
-             _ref.read(diagnosisResultProvider.notifier).state = result;
+             ref.read(diagnosisResultProvider.notifier).setDiagnosis(result);
           } catch (e) {
-              // Handle error (maybe show via a separate error provider or snackbar controller)
               print("Error analyzing with photo: $e");
           }
       }
   }
 }
 
-final recordingControllerProvider = StateNotifierProvider<RecordingController, RecordingState>((ref) {
-  return RecordingController(
-    ref.watch(audioServiceProvider),
-    ref.watch(apiServiceProvider),
-    ref.watch(cameraServiceProvider),
-    ref,
-  );
-});
+final recordingControllerProvider = NotifierProvider<RecordingController, RecordingState>(RecordingController.new);
 
 // State for Diagnosis Result
-final diagnosisResultProvider = StateProvider<Map<String, dynamic>?>((ref) => null);
+class DiagnosisNotifier extends Notifier<Map<String, dynamic>?> {
+  @override
+  Map<String, dynamic>? build() => null;
+
+  void setDiagnosis(Map<String, dynamic>? diagnosis) {
+    state = diagnosis;
+  }
+}
+
+final diagnosisResultProvider = NotifierProvider<DiagnosisNotifier, Map<String, dynamic>?>(DiagnosisNotifier.new);

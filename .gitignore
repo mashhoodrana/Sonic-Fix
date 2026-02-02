@@ -32,6 +32,8 @@
 .firebaserc
 firebase-debug.log
 firebase-debug.*.log
+google-services.json
+GoogleService-Info.plist
 
 # Python / Backend
 __pycache__/
