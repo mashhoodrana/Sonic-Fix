@@ -16,7 +16,7 @@ initialize_app()
 @https_fn.on_request(
     cors=options.CorsOptions(cors_origins="*", cors_methods=["post"]),
     timeout_sec=300,
-    memory_mb=512,
+    memory=options.MemoryOption.MB_512,
     region="us-central1",
     secrets=["GOOGLE_API_KEY"] # <--- IMPORTANT: Allow access to the secret
 )

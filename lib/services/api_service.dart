@@ -9,13 +9,10 @@ final apiServiceProvider = Provider((ref) => ApiService());
 
 class ApiService {
   // Replace with your actual Cloud Function URL after deployment
-  // e.g. https://us-central1-your-project.cloudfunctions.net/analyze_audio
-  final String _cloudFunctionUrl = 'YOUR_CLOUD_FUNCTION_URL_HERE'; // TODO: Update this
+  final String _cloudFunctionUrl = 'https://us-central1-sonicfix-e2e1f.cloudfunctions.net/analyze_audio'; 
 
   Future<Map<String, dynamic>> analyzeAudio(String filePath, {String? imagePath}) async {
-    if (_cloudFunctionUrl.contains('YOUR_CLOUD_FUNCTION_URL_HERE')) {
-      throw Exception('Configuration Error: Cloud Function URL not set. Please update lib/services/api_service.dart with your deployed function URL.');
-    }
+    // URL Check removed as it is now configured.
 
     try {
       // 1. Upload to Firebase Storage

@@ -34,6 +34,7 @@ firebase-debug.log
 firebase-debug.*.log
 google-services.json
 GoogleService-Info.plist
+lib/firebase_options.dart
 
 # Python / Backend
 __pycache__/

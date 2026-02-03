@@ -4,16 +4,16 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'ui/home_screen.dart';
 
-// Import Firebase Options if generated, but we might not have them yet.
-// For now, we'll assume default init or user needs to run flutterfire configure.
-// We will wrap init in a try/catch or just use default for web/android if configured.
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Firebase.initializeApp(); 
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
   } catch (e) {
-    print("Firebase init error (expected if not configured): $e");
+    print("Firebase init error: $e");
   }
 
   runApp(const ProviderScope(child: App()));
