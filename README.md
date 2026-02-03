@@ -101,4 +101,4 @@ flutter run
 - **Git Ignore**: Protected files (`google-services.json`, `.env`, `lib/firebase_options.dart`) are excluded from version control to prevent leaks.
 
 ## 📝 License
-This project is for educational and portfolio purposes.
+This project is for the Gemini 3 Hackathon 2026.
