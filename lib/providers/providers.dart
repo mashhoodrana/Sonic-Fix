@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/audio_service.dart';
 import '../services/api_service.dart';
+import '../services/mock_api_service.dart';
 import '../services/camera_service.dart';
 
 // State for recording
@@ -9,13 +11,11 @@ class RecordingState {
   final String? path;
   final bool isProcessing;
 
-  RecordingState({
-    this.isRecording = false,
-    this.path,
-    this.isProcessing = false
-  });
+  RecordingState(
+      {this.isRecording = false, this.path, this.isProcessing = false});
 
-  RecordingState copyWith({bool? isRecording, String? path, bool? isProcessing}) {
+  RecordingState copyWith(
+      {bool? isRecording, String? path, bool? isProcessing}) {
     return RecordingState(
       isRecording: isRecording ?? this.isRecording,
       path: path ?? this.path,
@@ -26,6 +26,12 @@ class RecordingState {
 
 final cameraServiceProvider = Provider((ref) => CameraService());
 
+// Mock mode toggle - set to true to test UI without backend
+const bool useMockMode = true;
+
+// Mock API service provider
+final mockApiServiceProvider = Provider((ref) => MockApiService());
+
 class RecordingController extends Notifier<RecordingState> {
   @override
   RecordingState build() {
@@ -34,7 +40,7 @@ class RecordingController extends Notifier<RecordingState> {
 
   Future<void> toggleRecording() async {
     final audioService = ref.read(audioServiceProvider);
-    
+
     if (state.isRecording) {
       final path = await audioService.stopRecording();
       state = state.copyWith(isRecording: false, path: path);
@@ -46,12 +52,22 @@ class RecordingController extends Notifier<RecordingState> {
 
   Future<Map<String, dynamic>?> analyze({String? imagePath}) async {
     if (state.path == null) return null;
-    final apiService = ref.read(apiServiceProvider);
 
     state = state.copyWith(isProcessing: true);
     try {
-      final result = await apiService.analyzeAudio(state.path!, imagePath: imagePath);
-      return result;
+      if (useMockMode) {
+        // Use mock service for testing
+        final mockService = ref.read(mockApiServiceProvider);
+        final result =
+            await mockService.analyzeAudio(state.path!, imagePath: imagePath);
+        return result;
+      } else {
+        // Use real API service
+        final apiService = ref.read(apiServiceProvider);
+        final result =
+            await apiService.analyzeAudio(state.path!, imagePath: imagePath);
+        return result;
+      }
     } catch (e) {
       rethrow;
     } finally {
@@ -60,20 +76,22 @@ class RecordingController extends Notifier<RecordingState> {
   }
 
   Future<void> refineWithPhoto() async {
-      final cameraService = ref.read(cameraServiceProvider);
-      final imagePath = await cameraService.takePhoto();
-      if (imagePath != null) {
-          try {
-             final result = await analyze(imagePath: imagePath);
-             ref.read(diagnosisResultProvider.notifier).setDiagnosis(result);
-          } catch (e) {
-              print("Error analyzing with photo: $e");
-          }
+    final cameraService = ref.read(cameraServiceProvider);
+    final imagePath = await cameraService.takePhoto();
+    if (imagePath != null) {
+      try {
+        final result = await analyze(imagePath: imagePath);
+        ref.read(diagnosisResultProvider.notifier).setDiagnosis(result);
+      } catch (e) {
+        debugPrint("Error analyzing with photo: $e");
       }
+    }
   }
 }
 
-final recordingControllerProvider = NotifierProvider<RecordingController, RecordingState>(RecordingController.new);
+final recordingControllerProvider =
+    NotifierProvider<RecordingController, RecordingState>(
+        RecordingController.new);
 
 // State for Diagnosis Result
 class DiagnosisNotifier extends Notifier<Map<String, dynamic>?> {
@@ -85,4 +103,6 @@ class DiagnosisNotifier extends Notifier<Map<String, dynamic>?> {
   }
 }
 
-final diagnosisResultProvider = NotifierProvider<DiagnosisNotifier, Map<String, dynamic>?>(DiagnosisNotifier.new);
+final diagnosisResultProvider =
+    NotifierProvider<DiagnosisNotifier, Map<String, dynamic>?>(
+        DiagnosisNotifier.new);
