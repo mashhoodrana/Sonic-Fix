@@ -73,9 +73,33 @@ class HomeScreen extends ConsumerWidget {
               if (!ref.read(recordingControllerProvider).isRecording && ref.read(recordingControllerProvider).path != null) {
                   try {
                     final result = await controller.analyze();
-                    ref.read(diagnosisResultProvider.notifier).setDiagnosis(result);
-                    
-                    if (result != null) {
+                    if (result != null && result['valid'] == false) {
+                        showDialog(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text("Analysis Paused"),
+                            content: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(result['error'] ?? "Sound rejected."),
+                                const SizedBox(height: 12),
+                                const Text("Detected:", style: TextStyle(fontWeight: FontWeight.bold)),
+                                Text((result['detected_sounds'] as List?)?.join(", ") ?? "Unknown"),
+                                const SizedBox(height: 12),
+                                Text(result['tip'] ?? "Try getting closer to the source."),
+                              ],
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text("OK"),
+                              ),
+                            ],
+                          ),
+                        );
+                    } else if (result != null) {
+                        ref.read(diagnosisResultProvider.notifier).setDiagnosis(result);
                         showModalBottomSheet(
                             context: context,
                             isScrollControlled: true,

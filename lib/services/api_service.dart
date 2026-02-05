@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 final apiServiceProvider = Provider((ref) => ApiService());
 
 class ApiService {
-  // Replace with your actual Cloud Function URL after deployment
+  //Cloud Function URL after deployment
   final String _cloudFunctionUrl = 'https://us-central1-sonicfix-e2e1f.cloudfunctions.net/analyze_audio'; 
 
   Future<Map<String, dynamic>> analyzeAudio(String filePath, {String? imagePath}) async {
