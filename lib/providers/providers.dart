@@ -27,7 +27,7 @@ class RecordingState {
 final cameraServiceProvider = Provider((ref) => CameraService());
 
 // Mock mode toggle - set to true to test UI without backend
-const bool useMockMode = true;
+const bool useMockMode = false;
 
 // Mock API service provider
 final mockApiServiceProvider = Provider((ref) => MockApiService());

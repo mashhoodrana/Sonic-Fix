@@ -65,6 +65,7 @@ def ensure_sample_rate(file_path, target_sr=16000):
     secrets=["GOOGLE_API_KEY"]
 )
 def analyze_audio(req: https_fn.Request) -> https_fn.Response:
+    print("Function Version: 4.1.0 - 4GB Mem")
     """
     3-Layer Pipeline:
     1. Signal Validation (YAMNet)
