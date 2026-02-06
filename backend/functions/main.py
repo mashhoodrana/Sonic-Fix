@@ -205,8 +205,8 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
 
         # Generate Response
         try:
-            print(f"Calling Gemini API (gemini-2.0-flash)...")
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            print(f"Calling Gemini API (gemini-flash-lite-latest)...")
+            model = genai.GenerativeModel('gemini-flash-lite-latest')
             response = model.generate_content(
                 gemini_inputs,
                 generation_config=genai.types.GenerationConfig(
@@ -219,7 +219,15 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
         
         try:
             diagnosis_json = json.loads(response.text)
-        except Exception:
+            # Smart Parser: Handle List vs Dict
+            if isinstance(diagnosis_json, list):
+                if len(diagnosis_json) > 0:
+                    diagnosis_json = diagnosis_json[0]
+                else:
+                    raise Exception("Empty JSON list returned")
+                    
+        except Exception as e:
+            print(f"JSON Parse Error: {e} | Raw: {response.text}")
             diagnosis_json = {
                 "machine_identified": "Unknown",
                 "problem": "Analysis Unclear",
