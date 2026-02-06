@@ -1,11 +1,12 @@
 # SonicFix: AI Acoustic Mechanic 🔧🔊
 
-**SonicFix** is an intelligent mobile application that diagnoses mechanical issues by listening to the sound of your machine (car, appliance, etc.). It uses **Gemini 1.5 Flash** (via Python Cloud Functions) to analyze audio waveforms and provide a detailed diagnosis, including severity, estimated repair costs, and fix steps.
+**SonicFix** is an intelligent mobile application that diagnoses mechanical issues by listening to the sound of your machine (car, appliance, etc.). It uses **YAMNet** for real-time signal validation to ensure sound is mechanical, and **Gemini 1.5 Flash** (via Python Cloud Functions) to analyze audio waveforms and provide a detailed diagnosis, including severity, estimated repair costs, and fix steps.
 
 ![Flutter](https://img.shields.io/badge/Flutter-3.x-blue?logo=flutter)
 ![Firebase](https://img.shields.io/badge/Firebase-Gen2-orange?logo=firebase)
 ![Gemini](https://img.shields.io/badge/AI-Gemini_1.5-8E75B2?logo=google-bard)
 ![Python](https://img.shields.io/badge/Backend-Python-yellow?logo=python)
+![YAMNet](https://img.shields.io/badge/YAMNet-1.5-8E75B2?logo=google-bard)
 
 ---
 
@@ -18,7 +19,9 @@ graph LR
     A[Flutter App] -->|Upload Audio/Image| B[Firebase Storage]
     A -->|POST Request| C[Cloud Functions - Python]
     C -->|Download File| B
-    C -->|Generate Content| D[Gemini 1.5 Flash]
+    C -->|Validate Signal| Y[YAMNet]
+    Y -->|Mechanical Score| C
+    C -->|Context + Media| D[Gemini 1.5 Flash]
     D -->|JSON Diagnosis| C
     C -->|Save Record| E[Firestore]
     C -->|Return Result| A
@@ -32,6 +35,7 @@ graph LR
   - **Severity Rating**: Low, Medium, or High priority.
   - **Cost Estimation**: Rough estimate for parts/labor.
   - **Actionable Steps**: Step-by-step guide to fix the issue.
+- **Smart Filtering**: Uses **YAMNet** (Machine Learning) to filter out non-mechanical sounds (speech, music) before processing.
 - **Multimodal Fallback**: If audio is unclear, the AI requests a **photo**, allowing users to upload visual context for a more accurate diagnosis.
 - **Dark Mode**: Sleek, modern Material 3 design.
 
