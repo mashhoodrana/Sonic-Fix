@@ -16,7 +16,7 @@ The app follows a **Serverless Event-Driven Architecture**:
 ```mermaid
 graph LR
     A[Flutter App] -->|Upload Audio/Image| B[Firebase Storage]
-    A -->|POST Request| C[Cloud Functions (Python)]
+    A -->|POST Request| C[Cloud Functions - Python]
     C -->|Download File| B
     C -->|Generate Content| D[Gemini 1.5 Flash]
     D -->|JSON Diagnosis| C
