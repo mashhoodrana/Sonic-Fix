@@ -3,22 +3,20 @@ import json
 import tempfile
 from firebase_functions import https_fn, options
 
+# --- CONFIGURATION ---
 # Global YAMNet Model Caching
 yamnet_model_handle = 'https://tfhub.dev/google/yamnet/1'
 yamnet_model = None
 
-# Mechanical Whitelist (Lower case for robust matching)
-MECHANICAL_WHITELIST = {
-    'engine', 'idling', 'knock', 'motor', 'vehicle', 'clicking', 'squeal', 
-    'thump', 'mechanism', 'rattle', 'clatter', 'grinding', 'hiss', 'machinery',
-    'pump', 'compressor', 'vibration', 'acceleration', 'revving',
-    # Broadening for aggressive mechanical sounds / misclassifications
-    'tool', 'drill', 'saw', 'vacuum', 'razor', 'clipper', 'buzzer', 
-    'scrape', 'creak', 'rub', 'bang', 'groan', 'tire', 'brake'
+# Blacklist (Only for logging warnings/context now - DOES NOT BLOCK)
+NON_MECHANICAL_BLACKLIST = {
+    'speech', 'silence', 'manipulation', 'conversation', 'narration', 'monologue', 
+    'music', 'musical instrument', 'song', 'singing', 'whistle'
 }
 
 def load_yamnet():
     """Loads the YAMNet model from TF Hub if not already loaded."""
+    # Lazy import
     import tensorflow_hub as hub
     global yamnet_model
     if yamnet_model is None:
@@ -27,74 +25,67 @@ def load_yamnet():
     return yamnet_model
 
 def ensure_sample_rate(file_path, target_sr=16000):
-    """
-    Ensures input audio is 16kHz mono for YAMNet.
-    Returns (waveform_data, sample_rate).
-    """
+    """Ensures input audio is 16kHz mono for YAMNet."""
     import numpy as np
     import scipy.io.wavfile as wav
     import scipy.signal
+    
     try:
         sr, waveform = wav.read(file_path)
-        
-        # Convert to mono if stereo
         if len(waveform.shape) > 1:
             waveform = np.mean(waveform, axis=1)
-            
-        # Normalize to -1.0 to 1.0 (if int16)
         if waveform.dtype != np.float32:
              waveform = waveform.astype(np.float32) / 32768.0
-
-        # Resample if needed
         if sr != target_sr:
-            print(f"Resampling from {sr} to {target_sr}...")
-            # Calculate number of samples
             num_samples = int(len(waveform) * target_sr / sr)
             waveform = scipy.signal.resample(waveform, num_samples)
-            
         return waveform, target_sr
     except Exception as e:
-        print(f"Error processing audio: {e}")
+        print(f"YAMNet Preprocessing Error: {e}")
         return None, None
 
 @https_fn.on_request(
     cors=options.CorsOptions(cors_origins="*", cors_methods=["post"]),
     timeout_sec=300,
-    memory=options.MemoryOption.GB_4, # Increased for TensorFlow
+    memory=options.MemoryOption.GB_4,
     region="us-central1",
     secrets=["GOOGLE_API_KEY"]
 )
 def analyze_audio(req: https_fn.Request) -> https_fn.Response:
-    print("Function Version: 4.1.0 - 4GB Mem")
-    """
-    3-Layer Pipeline:
-    1. Signal Validation (YAMNet)
-    2. Logic Gate (Is it mechanical?)
-    3. Contextual Reasoning (Gemini 1.5 Flash)
-    """
-    # Initialize imports locally to avoid cold-start timeout
-    from firebase_admin import initialize_app, storage, firestore, _apps, get_app
-    from google import genai
-    from google.genai import types
-    
-    if not _apps:
-        initialize_app()
-
-    # Initialize Gemini Client
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-         return https_fn.Response(json.dumps({"error": "Configuration error: Missing API Key"}), status=500)
-    
-    client = genai.Client(api_key=api_key)
+    print("Function Version: 4.3.0 - Stable SDK (google-generativeai)")
+    temp_audio_path = None
+    temp_image_path = None
 
     try:
-        req_json = req.get_json()
-        file_path = req_json.get("file_path")
+        # --- 0. SECURE IMPORTS & SETUP ---
+        from firebase_admin import initialize_app, storage, firestore, _apps
+        import google.generativeai as genai # The STABLE SDK
+        import numpy as np
+        import tensorflow as tf
+        import time
+
+        if not _apps:
+            initialize_app()
+
+        # Initialize Gemini Cleanly
+        api_key_raw = os.environ.get("GOOGLE_API_KEY", "")
+        if not api_key_raw:
+             return https_fn.Response(json.dumps({"error": "Configuration error: Missing API Key"}), status=500, mimetype="application/json")
         
+        # Sanitize key to prevent '503 illegal metadata' gRPC error
+        api_key = api_key_raw.strip()
+        genai.configure(api_key=api_key)
+
+        # Parse Request
+        req_json = req.get_json(silent=True)
+        if not req_json:
+             return https_fn.Response(json.dumps({"error": "Invalid or missing JSON body"}), status=400, mimetype="application/json")
+
+        file_path = req_json.get("file_path")
         if not file_path:
             return https_fn.Response(json.dumps({"error": "Missing file_path"}), status=400, mimetype="application/json")
 
-        # Download file
+        print(f"Processing file: {file_path}")
         bucket = storage.bucket()
         blob = bucket.blob(file_path)
         
@@ -103,147 +94,167 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
             temp_audio_path = temp_audio.name
             
         image_path = req_json.get("image_path")
-        temp_image_path = None
         if image_path:
             image_blob = bucket.blob(image_path)
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_image:
                 image_blob.download_to_filename(temp_image.name)
                 temp_image_path = temp_image.name
 
+        # --- STEP 1: YAMNet Analysis ---
+        yamnet_data = {
+            "primary_sound": "Sensor Bypass",
+            "confidence": 0,
+            "all_detected": [],
+            "is_blacklisted": False
+        }
+        
         try:
-            # --- LAYER 1: YAMNet Signal Validation ---
-            import numpy as np
-            import tensorflow as tf
+            print("Starting YAMNet Analysis...")
             model = load_yamnet()
             waveform, sr = ensure_sample_rate(temp_audio_path)
             
-            if waveform is None:
-                 return https_fn.Response(json.dumps({"error": "Audio processing failed"}), status=400)
-            
-            print(f"Audio Analysis - Shape: {waveform.shape}, Max Amp: {np.max(waveform)}, Mean Amp: {np.mean(waveform)}")
+            if waveform is not None:
+                scores, embeddings, spectrogram = model(waveform)
+                class_map_path = model.class_map_path().numpy()
+                
+                def parse_yamnet_class(line):
+                    if isinstance(line, bytes):
+                        line = line.decode('utf-8')
+                    parts = line.strip().split(',')
+                    return parts[-1].strip()
 
-            # Run Inference
-            scores, embeddings, spectrogram = model(waveform)
-            class_map_path = model.class_map_path().numpy()
-            
-            # Fix: Parse YAMNet CSV correctly (format: index, mid, display_name)
-            def parse_yamnet_class(line):
-                parts = line.strip().split(',')
-                return parts[-1].strip()
+                class_names = [parse_yamnet_class(x) for x in tf.io.gfile.GFile(class_map_path).readlines()]
+                class_names = class_names[1:]
 
-            class_names = [parse_yamnet_class(x) for x in tf.io.gfile.GFile(class_map_path).readlines()]
-            class_names = class_names[1:] # Skip header
+                mean_scores = np.mean(scores, axis=0)
+                top_n_indices = np.argsort(mean_scores)[::-1][:5]
+                
+                yamnet_data["all_detected"] = [class_names[i] for i in top_n_indices]
+                yamnet_data["primary_sound"] = yamnet_data["all_detected"][0]
+                yamnet_data["confidence"] = int(mean_scores[top_n_indices[0]] * 100)
+                
+                if any(b in yamnet_data["primary_sound"].lower() for b in NON_MECHANICAL_BLACKLIST):
+                    yamnet_data["is_blacklisted"] = True
+                    print(f"NOTICE: YAMNet detected '{yamnet_data['primary_sound']}'. Flagging for Gemini review.")
+                else:
+                    print(f"SUCCESS: YAMNet detected mechanical sound: {yamnet_data['primary_sound']}")
+                    
+        except Exception as e:
+            print(f"WARNING: YAMNet failed (continuing to Gemini): {e}")
 
-            
-            # Get Top 5 (Increased from 3 to catch 'engine' if it's lower down)
-            mean_scores = np.mean(scores, axis=0)
-            top_n_indices = np.argsort(mean_scores)[::-1][:5]
-            top_sounds = [class_names[i] for i in top_n_indices]
-            top_score_conf = int(mean_scores[top_n_indices[0]] * 100)
-            
-            print(f"YAMNet Detected: {top_sounds} ({top_score_conf}%)")
+        # --- STEP 2: Gemini Multimodal Analysis ---
+        print("Starting Gemini Analysis (Stable SDK)...")
+        
+        gemini_inputs = []
+        
+        # Add Prompt
+        context_note = ""
+        if yamnet_data["is_blacklisted"]:
+            context_note = f"NOTE: The preliminary audio sensor detected '{yamnet_data['primary_sound']}' which might be background noise. IGNORE the sensor and PROCEED with mechanical diagnosis if you hear a machine."
+        else:
+             context_note = f"The sensor detected '{yamnet_data['primary_sound']}' which confirms mechanical activity."
 
-            # --- LAYER 2: Logic Gate ---
-            is_mechanical = False
-            detected_mechanical_sounds = []
-            
-            for sound in top_sounds:
-                # Check for substring match (e.g. 'car engine' contains 'engine')
-                if any(white in sound for white in MECHANICAL_WHITELIST):
-                    is_mechanical = True
-                    detected_mechanical_sounds.append(sound)
+        prompt = f"""
+        Role: You are 'SonicFix', a Senior Mechanical Diagnostics AI.
+        
+        Input Data:
+        1. AUDIO SENSOR ADVICE: {yamnet_data['primary_sound']} (Confidence: {yamnet_data['confidence']}%). {context_note}
+        2. IMAGE INPUT: {"Provided" if temp_image_path else "Not Provided"}
+        
+        Task:
+        Perform 'Multimodal Fusion Diagnosis'.
+        1. IF IMAGE IS PROVIDED: Identify the machine type from the visual data first.
+        2. Listen to the audio to identify the specific failure mode (e.g., 'Grinding', 'Hissing', 'Clicking').
+        3. Diagnose the fault. If the audio is quiet, assume it is a "Startup Failure" or "Electrical Fault" based on the image context.
+        4. IGNORE 'Music' or 'Speech' labels from the sensor if the audio clearly contains engine/motor sounds.
+        
+        Pricing Context (Pakistan Market 2026):
+        - Minor Fixes (Belts, cleaning): 500 - 2,500 PKR
+        - Major Fixes (Motors, Compressors): 5,000 - 15,000 PKR
+        - Critical (Engine overhaul): 50,000+ PKR
+        
+        Output Schema (Return Raw JSON Only):
+        {{
+            "machine_identified": "string (e.g. 'HP Printer' or 'Unknown')",
+            "problem": "string (The technical fault, e.g. 'Worn Gears')",
+            "severity": "Low|Medium|High",
+            "fix_steps": ["step 1", "step 2"],
+            "estimated_cost": "string (e.g. '1500 PKR')",
+            "confidence": "High|Medium|Low"
+        }}
+        """
+        gemini_inputs.append(prompt)
 
-            if not is_mechanical:
-                print(f"Blocked by Logic Gate. Detected: {top_sounds}")
-                return https_fn.Response(json.dumps({
-                    "valid": False,
-                    "error": "No mechanical sound detected.",
-                    "detected_sounds": top_sounds,
-                    "tip": "Please get closer to the machinery and try again."
-                }), status=200, mimetype="application/json") # Return 200 so app handles it gracefully
+        # Upload Audio using Stable SDK
+        # Note: upload_file returns a file object that can be passed to generate_content directly
+        print("Uploading audio to Gemini...")
+        audio_file = genai.upload_file(path=temp_audio_path, mime_type="audio/wav")
+        
+        # Wait for processing (Audio is usually instant, but good practice)
+        while audio_file.state.name == "PROCESSING":
+            time.sleep(1)
+            audio_file = genai.get_file(audio_file.name)
+            
+        gemini_inputs.append(audio_file)
+        
+        # Upload Image
+        if temp_image_path:
+             print("Uploading image to Gemini...")
+             image_file = genai.upload_file(path=temp_image_path, mime_type="image/jpeg")
+             gemini_inputs.append(image_file)
 
-            # --- LAYER 3: Contextual Reasoning (Gemini) ---
-            # Upload actual audio file to Gemini (using the original temp file, not the resampled array)
-            audio_upload_result = client.files.upload(file=temp_audio_path)
-            
-            gemini_contents = [audio_upload_result]
-            
-            if temp_image_path:
-                 image_upload_result = client.files.upload(file=temp_image_path)
-                 gemini_contents.append(image_upload_result)
-            
-            # Construct Contextual Prompt
-            primary_sound = top_sounds[0]
-            context_str = f"Validated Signal Data: The audio contains {primary_sound} with {top_score_conf}% confidence. Secondary sounds: {top_sounds[1:]}."
-            
-            base_prompt = f"""
-            You are an expert AI Mechanic. The user has uploaded an audio file.
-            {context_str}
-            
-            Using this signal data as ground truth, diagnose the specific mechanical fault.
-            Return ONLY a raw JSON object (no markdown) with this schema: 
-            {{ 
-                'problem': string, 
-                'severity': 'Low'|'Medium'|'High', 
-                'fix_steps': list[string], 
-                'estimated_cost': string,
-                'confidence': 'high'|'low'
-            }}.
-            """
-
-            if temp_image_path:
-                prompt = base_prompt + " I have also provided an image. Use it to confirm your diagnosis."
-            else:
-                prompt = base_prompt + " If the audio is unclear, set 'confidence' to 'low'."
-
-            gemini_contents.insert(0, prompt)
-
-            # Generate Content
-            response = client.models.generate_content(
-                model='gemini-1.5-flash',
-                contents=gemini_contents,
-                config=types.GenerateContentConfig(
-                    response_mime_type='application/json'
+        # Generate Response
+        try:
+            print(f"Calling Gemini API (gemini-2.0-flash)...")
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            response = model.generate_content(
+                gemini_inputs,
+                generation_config=genai.types.GenerationConfig(
+                    response_mime_type="application/json"
                 )
             )
-            
-            # Parse result
-            try:
-                diagnosis_json = json.loads(response.text)
-            except json.JSONDecodeError:
-                diagnosis_json = {
-                    "problem": "Unclear analysis",
-                    "severity": "Unknown",
-                    "fix_steps": ["Try recording again"],
-                    "estimated_cost": "Unknown",
-                    "raw_response": response.text
-                }
-
-            # Enrich with Metadata
-            diagnosis_json['signal_analysis'] = {
-                'primary_sound': primary_sound,
-                'confidence': top_score_conf,
-                'all_detected': top_sounds
+        except Exception as e:
+            print(f"Gemini API Error: {e}")
+            raise Exception(f"Gemini Analysis Failed: {e}")
+        
+        try:
+            diagnosis_json = json.loads(response.text)
+        except Exception:
+            diagnosis_json = {
+                "machine_identified": "Unknown",
+                "problem": "Analysis Unclear",
+                "severity": "Low",
+                "fix_steps": ["Try recording closer to the source"],
+                "estimated_cost": "Unknown",
+                "confidence": "Low"
             }
 
-            # Save to Firestore
-            db = firestore.client()
-            doc_ref = db.collection("diagnoses").document()
-            doc_ref.set({
-                "file_path": file_path,
-                "diagnosis": diagnosis_json,
-                "timestamp": firestore.SERVER_TIMESTAMP,
-                "model": "gemini-1.5-flash+yamnet"
-            })
-            
-            return https_fn.Response(json.dumps(diagnosis_json), status=200, mimetype="application/json")
+        diagnosis_json['signal_analysis'] = yamnet_data
 
-        finally:
-            if os.path.exists(temp_audio_path):
+        # Save to Firestore
+        db = firestore.client()
+        db.collection("diagnoses").add({
+            "file_path": file_path,
+            "diagnosis": diagnosis_json,
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "model": "gemini-1.5-flash+yamnet-fusion"
+        })
+        
+        print(f"Diagnosis Complete: {diagnosis_json['problem']}")
+        return https_fn.Response(json.dumps(diagnosis_json), status=200, mimetype="application/json")
+
+    except Exception as e:
+        print(f"CRITICAL FUNCTION ERROR: {e}")
+        return https_fn.Response(json.dumps({
+            "error": "Analysis Failed",
+            "details": str(e)
+        }), status=500, mimetype="application/json")
+
+    finally:
+        try:
+            if temp_audio_path and os.path.exists(temp_audio_path):
                 os.remove(temp_audio_path)
             if temp_image_path and os.path.exists(temp_image_path):
                 os.remove(temp_image_path)
-
-    except Exception as e:
-        print(f"Error: {e}")
-        return https_fn.Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
+        except Exception:
+            pass
