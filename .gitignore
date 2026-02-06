@@ -58,3 +58,6 @@ env/
 # Secrets
 backend/functions/.env
 backend/functions/debug_import.py
+backend/functions/debug_gemini_connection.py
+backend/functions/simple_test.py
+backend/functions/list_all.py
