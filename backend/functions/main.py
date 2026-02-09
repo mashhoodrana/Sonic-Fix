@@ -25,20 +25,41 @@ def load_yamnet():
     return yamnet_model
 
 def ensure_sample_rate(file_path, target_sr=16000):
-    """Ensures input audio is 16kHz mono for YAMNet."""
+    """Ensures input audio is 16kHz mono for YAMNet (Optimized)."""
     import numpy as np
     import scipy.io.wavfile as wav
     import scipy.signal
     
     try:
         sr, waveform = wav.read(file_path)
+        
+        # 1. Convert to Mono
         if len(waveform.shape) > 1:
             waveform = np.mean(waveform, axis=1)
+            
+        # 2. Normalize to Float32 [-1, 1]
         if waveform.dtype != np.float32:
-             waveform = waveform.astype(np.float32) / 32768.0
+             # Handle integer types correctly
+             if waveform.dtype == np.int16:
+                 waveform = waveform.astype(np.float32) / 32768.0
+             elif waveform.dtype == np.uint8:
+                 waveform = (waveform.astype(np.float32) - 128) / 128.0
+             else:
+                 waveform = waveform.astype(np.float32)
+
+        # 3. Optimize Duration (Cap at 5 seconds for YAMNet speed/memory)
+        # YAMNet only needs short clips to identify texture.
+        max_samples = 5 * sr 
+        if len(waveform) > max_samples:
+            print(f"Truncating audio from {len(waveform)/sr:.1f}s to 5s for YAMNet bottleneck prevention.")
+            waveform = waveform[:max_samples]
+
+        # 4. Resample if needed
         if sr != target_sr:
             num_samples = int(len(waveform) * target_sr / sr)
+            # Use lower-quality but faster/lighter resampling if needed in future
             waveform = scipy.signal.resample(waveform, num_samples)
+            
         return waveform, target_sr
     except Exception as e:
         print(f"YAMNet Preprocessing Error: {e}")
@@ -195,7 +216,7 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
 
         # Generate Response (With Retry Logic)
         response = None
-        current_model_name = 'gemini-flash-lite-latest' # Verified working model
+        current_model_name = 'gemini-3-flash-preview' # Verified working model
         
         for attempt in range(2): # Try twice
             try:
@@ -250,7 +271,7 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
             "file_path": file_path,
             "diagnosis": diagnosis_json,
             "timestamp": firestore.SERVER_TIMESTAMP,
-            "model": "gemini-1.5-flash+yamnet-fusion"
+            "model": "gemini-3-flash-preview+yamnet-fusion"
         })
         
         print(f"Diagnosis Complete: {diagnosis_json['problem']}")
