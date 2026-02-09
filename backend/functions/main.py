@@ -100,6 +100,9 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
                 image_blob.download_to_filename(temp_image.name)
                 temp_image_path = temp_image.name
 
+        if not temp_image_path:
+             return https_fn.Response(json.dumps({"error": "Visual context required. Please take a photo of the machine."}), status=400, mimetype="application/json")
+
         # --- STEP 1: YAMNet Analysis ---
         yamnet_data = {
             "primary_sound": "Sensor Bypass",
@@ -148,75 +151,75 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
         gemini_inputs = []
         
         # Add Prompt
-        context_note = ""
-        if yamnet_data["is_blacklisted"]:
-            context_note = f"NOTE: The preliminary audio sensor detected '{yamnet_data['primary_sound']}' which might be background noise. IGNORE the sensor and PROCEED with mechanical diagnosis if you hear a machine."
-        else:
-             context_note = f"The sensor detected '{yamnet_data['primary_sound']}' which confirms mechanical activity."
-
         prompt = f"""
         Role: You are 'SonicFix', a Senior Mechanical Diagnostics AI.
         
-        Input Data:
-        1. AUDIO SENSOR ADVICE: {yamnet_data['primary_sound']} (Confidence: {yamnet_data['confidence']}%). {context_note}
-        2. IMAGE INPUT: {"Provided" if temp_image_path else "Not Provided"}
-        
-        Task:
-        Perform 'Multimodal Fusion Diagnosis'.
-        1. IF IMAGE IS PROVIDED: Identify the machine type from the visual data first.
-        2. Listen to the audio to identify the specific failure mode (e.g., 'Grinding', 'Hissing', 'Clicking').
-        3. Diagnose the fault. If the audio is quiet, assume it is a "Startup Failure" or "Electrical Fault" based on the image context.
-        4. IGNORE 'Music' or 'Speech' labels from the sensor if the audio clearly contains engine/motor sounds.
+        Task: Perform a "Visual-First" Multimodal Diagnosis.
+        1. ANALYZE IMAGE FIRST: Identify the specific machine, component, or appliance in the photo. Look for visual signs of wear, rust, leakage, or damage.
+        2. ANALYZE AUDIO SECOND: Listen to the sound to identify the specific failure mode (e.g., 'Grinding' = Bearings, 'Hissing' = Leak, 'Clicking' = Relay/Starter).
+        3. FUSE DATA: Correlate the visual identification with the audio texture.
+           - IF Audio Sensor says '{yamnet_data['primary_sound']}' ({yamnet_data['confidence']}%), use it as a hint but TRUST YOUR EARS and EYE more.
+           - IGNORE non-mechanical sensor labels (like 'Speech' or 'Music') if you clearly see a machine and hear a motor.
         
         Pricing Context (Pakistan Market 2026):
-        - Minor Fixes (Belts, cleaning): 500 - 2,500 PKR
-        - Major Fixes (Motors, Compressors): 5,000 - 15,000 PKR
-        - Critical (Engine overhaul): 50,000+ PKR
+        - Minor Fixes (Belts, capacitors, cleaning): 500 - 2,500 PKR
+        - Major Fixes (Motors, Compressors, PCBs): 5,000 - 15,000 PKR
+        - Critical (Engine overhaul, replacement): 50,000+ PKR
         
         Output Schema (Return Raw JSON Only):
         {{
-            "machine_identified": "string (e.g. 'HP Printer' or 'Unknown')",
-            "problem": "string (The technical fault, e.g. 'Worn Gears')",
+            "machine_detected": "string (e.g. 'Haier Split AC Outdoor Unit')",
+            "visual_evidence": "string (e.g. 'Visible rust on the fan grill, oil residue on pipes')",
+            "audio_evidence": "string (e.g. 'Loud, rhythmic grinding noise correlating with fan rotation')",
+            "problem": "string (The technical fault, e.g. 'Fan Motor Bearing Failure')",
             "severity": "Low|Medium|High",
-            "fix_steps": ["step 1", "step 2"],
-            "estimated_cost": "string (e.g. '1500 PKR')",
+            "fix_steps": ["step 1", "step 2", "step 3"],
+            "estimated_cost": "string (e.g. '3500 PKR')",
             "confidence": "High|Medium|Low"
         }}
         """
         gemini_inputs.append(prompt)
 
-        # Upload Audio using Stable SDK
-        # Note: upload_file returns a file object that can be passed to generate_content directly
+        # Upload Audio
         print("Uploading audio to Gemini...")
         audio_file = genai.upload_file(path=temp_audio_path, mime_type="audio/wav")
-        
-        # Wait for processing (Audio is usually instant, but good practice)
         while audio_file.state.name == "PROCESSING":
             time.sleep(1)
             audio_file = genai.get_file(audio_file.name)
-            
         gemini_inputs.append(audio_file)
         
-        # Upload Image
-        if temp_image_path:
-             print("Uploading image to Gemini...")
-             image_file = genai.upload_file(path=temp_image_path, mime_type="image/jpeg")
-             gemini_inputs.append(image_file)
+        # Upload Image (Mandatory now)
+        print("Uploading image to Gemini...")
+        image_file = genai.upload_file(path=temp_image_path, mime_type="image/jpeg")
+        gemini_inputs.append(image_file)
 
-        # Generate Response
-        try:
-            print(f"Calling Gemini API (gemini-flash-lite-latest)...")
-            model = genai.GenerativeModel('gemini-flash-lite-latest')
-            response = model.generate_content(
-                gemini_inputs,
-                generation_config=genai.types.GenerationConfig(
-                    response_mime_type="application/json"
-                )
-            )
-        except Exception as e:
-            print(f"Gemini API Error: {e}")
-            raise Exception(f"Gemini Analysis Failed: {e}")
+        # Generate Response (With Retry Logic)
+        response = None
+        current_model_name = 'gemini-flash-lite-latest' # Verified working model
         
+        for attempt in range(2): # Try twice
+            try:
+                print(f"Calling Gemini API ({current_model_name}, Attempt {attempt+1})...")
+                model = genai.GenerativeModel(current_model_name)
+                response = model.generate_content(
+                    gemini_inputs,
+                    generation_config=genai.types.GenerationConfig(
+                        response_mime_type="application/json"
+                    )
+                )
+                break # Success
+            except Exception as e:
+                print(f"Gemini API Error (Attempt {attempt+1}): {e}")
+                if "429" in str(e) or "Resource exhausted" in str(e):
+                    print("Hit Rate Limit. Sleeping for 2 seconds...")
+                    time.sleep(2)
+                    continue
+                else:
+                    raise Exception(f"Gemini Analysis Failed: {e}")
+        
+        if not response:
+             raise Exception("Gemini failed after retries.")
+
         try:
             diagnosis_json = json.loads(response.text)
             # Smart Parser: Handle List vs Dict
@@ -229,10 +232,12 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
         except Exception as e:
             print(f"JSON Parse Error: {e} | Raw: {response.text}")
             diagnosis_json = {
-                "machine_identified": "Unknown",
-                "problem": "Analysis Unclear",
+                "machine_detected": "Unknown Device",
+                "visual_evidence": "Could not process image data",
+                "audio_evidence": "Could not process audio data",
+                "problem": "AI Analysis Failed",
                 "severity": "Low",
-                "fix_steps": ["Try recording closer to the source"],
+                "fix_steps": ["Try taking a clearer photo", "Record closer to the sound"],
                 "estimated_cost": "Unknown",
                 "confidence": "Low"
             }

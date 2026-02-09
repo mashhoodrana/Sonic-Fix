@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/providers.dart';
@@ -17,6 +18,9 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   final List<Map<String, dynamic>> _messages = [];
   final ScrollController _scrollController = ScrollController();
+  
+  // Doctor's Visit Workflow State
+  String? _imagePath;
 
   @override
   void dispose() {
@@ -36,6 +40,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
+  Future<void> _takePhoto() async {
+    final cameraService = ref.read(cameraServiceProvider);
+    final path = await cameraService.takePhoto();
+    if (path != null) {
+        setState(() {
+            _imagePath = path;
+            _messages.clear(); // Clear previous session
+            _messages.add({
+                'text': '📸 Image captured! Now, let me hear the machine.',
+                'isUser': false,
+            });
+        });
+    }
+  }
+
+  void _resetWorkflow() {
+      setState(() {
+          _imagePath = null;
+          _messages.clear();
+      });
+  }
+
   @override
   Widget build(BuildContext context) {
     final recordingState = ref.watch(recordingControllerProvider);
@@ -53,6 +79,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ),
         centerTitle: true,
+        actions: [
+            if (_imagePath != null && !recordingState.isRecording && !recordingState.isProcessing)
+                IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _resetWorkflow,
+                    tooltip: "New Diagnosis",
+                )
+        ],
       ),
       body: GradientBackground(
         child: SafeArea(
@@ -95,7 +129,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       RecordingWave(isRecording: true),
                       const SizedBox(height: 16),
                       Text(
-                        "Recording audio...",
+                        "Listening to Machine...",
                         style:
                             Theme.of(context).textTheme.titleMedium?.copyWith(
                                   color: Theme.of(context).colorScheme.primary,
@@ -104,7 +138,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Tap stop when ready",
+                        "Tap stop when ready to analyze",
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Theme.of(context)
                                   .colorScheme
@@ -116,7 +150,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
                 ),
 
-              // Bottom action area - SINGLE BUTTON
+              // Bottom action area
               Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
@@ -138,26 +172,72 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (!recordingState.isRecording &&
-                        !recordingState.isProcessing)
-                      Text(
-                        "Tap to start diagnosis",
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withValues(alpha: 0.6),
-                            ),
-                      ),
-                    if (recordingState.isRecording)
-                      Text(
-                        "Tap to stop recording",
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Colors.red.withValues(alpha: 0.8),
-                            ),
-                      ),
-                    const SizedBox(height: 16),
-                    _buildRecordButton(recordingState),
+                     // Workflow Logic
+                     if (_imagePath == null) ...[
+                         // STEP 1: TAKE PHOTO
+                         Text(
+                            "Step 1: Identify Machine",
+                            style: Theme.of(context).textTheme.titleMedium,
+                         ),
+                         const SizedBox(height: 8),
+                         Text(
+                            "SonicFix needs to see what we're fixing first.",
+                             style: Theme.of(context).textTheme.bodySmall,
+                         ),
+                         const SizedBox(height: 16),
+                         GestureDetector(
+                             onTap: _takePhoto,
+                             child: Container(
+                                 padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                                 decoration: BoxDecoration(
+                                     color: Theme.of(context).colorScheme.primary,
+                                     borderRadius: BorderRadius.circular(30),
+                                     boxShadow: [
+                                         BoxShadow(
+                                             color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                                             blurRadius: 10,
+                                             offset: const Offset(0, 4),
+                                         )
+                                     ]
+                                 ),
+                                 child: Row(
+                                     mainAxisSize: MainAxisSize.min,
+                                     children: const [
+                                         Icon(Icons.camera_alt, color: Colors.white),
+                                         SizedBox(width: 8),
+                                         Text("Take Photo", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                     ],
+                                 ),
+                             ),
+                         )
+                     ] else ...[
+                         // STEP 2: RECORD AUDIO
+                         if (!recordingState.isRecording && !recordingState.isProcessing) ...[
+                             Row(
+                                 mainAxisAlignment: MainAxisAlignment.center,
+                                 children: [
+                                     Container(
+                                         width: 40, height: 40,
+                                         margin: const EdgeInsets.only(right: 12),
+                                         decoration: BoxDecoration(
+                                             borderRadius: BorderRadius.circular(8),
+                                             border: Border.all(color: Colors.grey),
+                                             image: DecorationImage(
+                                                 image: FileImage(File(_imagePath!)),
+                                                 fit: BoxFit.cover,
+                                             )
+                                         ),
+                                     ),
+                                     const Text("✅ Photo Attached"),
+                                 ],
+                             ),
+                             const SizedBox(height: 16),
+                             const Text("Step 2: Record Sound"),
+                             const SizedBox(height: 16),
+                         ],
+                         
+                        _buildRecordButton(recordingState),
+                     ],
                   ],
                 ),
               ),
@@ -210,7 +290,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           const SizedBox(height: 32),
           Text(
-            "Welcome to SonicFix",
+            "SonicFix Doctor",
             style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -219,7 +299,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 48),
             child: Text(
-              "Record the sound and get instant diagnosis",
+              "Let's check your machine.\nFirst, I need to see it.",
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                     color: Theme.of(context)
@@ -240,50 +320,35 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ? null
           : () async {
               final controller = ref.read(recordingControllerProvider.notifier);
-
-              // Store context before async operation
               final scaffoldMessenger = ScaffoldMessenger.of(context);
 
               if (!recordingState.isRecording) {
-                // Start recording - CLEAR PREVIOUS MESSAGES
-                setState(() {
-                  _messages.clear(); // Clear previous diagnosis
-                });
-
+                // START RECORDING
                 await controller.toggleRecording();
 
                 setState(() {
                   _messages.add({
-                    'text': '🎤 Recording audio for diagnosis...',
+                    'text': '🎤 Listening for mechanical faults...',
                     'isUser': true,
                   });
                 });
                 _scrollToBottom();
               } else {
-                // Stop recording and analyze
+                // STOP AND ANALYZE
                 await controller.toggleRecording();
 
                 if (ref.read(recordingControllerProvider).path != null) {
                   try {
-                    final result = await controller.analyze();
+                    // PASS IMAGE PATH HERE
+                    final result = await controller.analyze(imagePath: _imagePath);
+                    
                     if (result != null && result['valid'] == false) {
                         if (context.mounted) {
                             showDialog(
                               context: context,
                               builder: (context) => AlertDialog(
                                 title: const Text("Analysis Paused"),
-                                content: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(result['error'] ?? "Sound rejected."),
-                                    const SizedBox(height: 12),
-                                    const Text("Detected:", style: TextStyle(fontWeight: FontWeight.bold)),
-                                    Text((result['detected_sounds'] as List?)?.join(", ") ?? "Unknown"),
-                                    const SizedBox(height: 12),
-                                    Text(result['tip'] ?? "Try getting closer to the source."),
-                                  ],
-                                ),
+                                content: Text(result['error'] ?? "Sound rejected."),
                                 actions: [
                                   TextButton(
                                     onPressed: () => Navigator.pop(context),
@@ -304,7 +369,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         });
                         _scrollToBottom();
 
-                        // Show detailed diagnosis sheet
                         Future.delayed(const Duration(milliseconds: 500), () {
                           if (context.mounted) {
                             showModalBottomSheet(
@@ -316,7 +380,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           }
                         });
                     }
-                    } catch (e) {
+                  } catch (e) {
                     scaffoldMessenger.showSnackBar(
                       SnackBar(
                         content: Text("Error: $e"),
@@ -362,6 +426,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   String _formatDiagnosisMessage(Map<String, dynamic> diagnosis) {
+    // Show visual evidence if available
+    final machine = diagnosis['machine_detected'] ?? 'Unknown Machine';
     final problem = diagnosis['problem'] ?? 'Unknown Issue';
     final severity = diagnosis['severity'] ?? 'Unknown';
     final cost = diagnosis['estimated_cost'] ?? 'N/A';
@@ -373,9 +439,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             : '🟢';
 
     return '✅ Diagnosis Complete!\n\n'
-        '$severityEmoji Issue Detected: $problem\n\n'
-        '📊 Severity: ${severity.toString().toUpperCase()}\n'
-        '💰 Estimated Cost: $cost\n\n'
-        'Tap below to view detailed repair steps →';
+        '👀 I see: $machine\n'
+        '$severityEmoji Failure: $problem\n\n'
+        '💰 Est. Cost: $cost\n'
+        'Tap for details →';
   }
 }
