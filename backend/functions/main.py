@@ -214,54 +214,63 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
         image_file = genai.upload_file(path=temp_image_path, mime_type="image/jpeg")
         gemini_inputs.append(image_file)
 
-        # Generate Response (With Retry Logic)
+        # Generate Response (With Priority Fallback Strategy)
         response = None
-        current_model_name = 'gemini-3-flash-preview' # Verified working model
         
-        for attempt in range(2): # Try twice
+        # User Strategy: "Use Gemini 3 models, fallback if fails"
+        PRIORITY_MODELS = [
+            'gemini-3-flash-preview',  # First Choice: Latest & Fast
+            'gemini-3-pro-preview',    # Fallback 1: More Powerful 
+            'gemini-2.0-flash'         # Safety Net: Proven Stable
+        ]
+        
+        last_error = None
+        
+        for model_name in PRIORITY_MODELS:
+            print(f"--- Attempting analysis with: {model_name} ---")
             try:
-                print(f"Calling Gemini API ({current_model_name}, Attempt {attempt+1})...")
-                model = genai.GenerativeModel(current_model_name)
+                model = genai.GenerativeModel(model_name)
                 response = model.generate_content(
                     gemini_inputs,
                     generation_config=genai.types.GenerationConfig(
                         response_mime_type="application/json"
                     )
                 )
-                break # Success
+                if response:
+                    print(f"SUCCESS: Analysis completed using {model_name}")
+                    diagnosis_json = json.loads(response.text) # Validate JSON immediately
+                    break # Stop if successful
+                    
             except Exception as e:
-                print(f"Gemini API Error (Attempt {attempt+1}): {e}")
-                if "429" in str(e) or "Resource exhausted" in str(e):
-                    print("Hit Rate Limit. Sleeping for 2 seconds...")
-                    time.sleep(2)
-                    continue
-                else:
-                    raise Exception(f"Gemini Analysis Failed: {e}")
+                error_msg = str(e)
+                print(f"FAILED with {model_name}: {error_msg}")
+                last_error = e
+                
+                # Check for critical errors that shouldn't trigger retry (like Auth)
+                if "403" in error_msg or "API_KEY" in error_msg:
+                    print("Critical Auth Error - Aborting Fallback.")
+                    raise e
+                    
+                # Rate Limits: Sleep briefly before next model
+                if "429" in error_msg or "Resource exhausted" in error_msg:
+                    print("Rate Limit Hit. Sleeping 1s before switching model...")
+                    time.sleep(1)
+                
+                continue # Try next model
         
-        if not response:
-             raise Exception("Gemini failed after retries.")
+        if not diagnosis_json:
+             raise Exception(f"Analysis Failed on all models. Last Error: {last_error}")
 
         try:
-            diagnosis_json = json.loads(response.text)
-            # Smart Parser: Handle List vs Dict
-            if isinstance(diagnosis_json, list):
-                if len(diagnosis_json) > 0:
-                    diagnosis_json = diagnosis_json[0]
-                else:
-                    raise Exception("Empty JSON list returned")
-                    
+             # Smart Parser: Handle List vs Dict (Just in case model returns list)
+             if isinstance(diagnosis_json, list):
+                 if len(diagnosis_json) > 0:
+                     diagnosis_json = diagnosis_json[0]
+                 else:
+                     raise Exception("Empty JSON list returned")
         except Exception as e:
-            print(f"JSON Parse Error: {e} | Raw: {response.text}")
-            diagnosis_json = {
-                "machine_detected": "Unknown Device",
-                "visual_evidence": "Could not process image data",
-                "audio_evidence": "Could not process audio data",
-                "problem": "AI Analysis Failed",
-                "severity": "Low",
-                "fix_steps": ["Try taking a clearer photo", "Record closer to the sound"],
-                "estimated_cost": "Unknown",
-                "confidence": "Low"
-            }
+             # Fallback if structure is weird (shouldn't happen with strict schema)
+             print(f"JSON Structure Warning: {e}")
 
         diagnosis_json['signal_analysis'] = yamnet_data
 
@@ -271,7 +280,7 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
             "file_path": file_path,
             "diagnosis": diagnosis_json,
             "timestamp": firestore.SERVER_TIMESTAMP,
-            "model": "gemini-3-flash-preview+yamnet-fusion"
+            "model": f"{model_name}+yamnet-fusion" 
         })
         
         print(f"Diagnosis Complete: {diagnosis_json['problem']}")
