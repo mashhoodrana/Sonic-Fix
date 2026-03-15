@@ -24,8 +24,8 @@ graph TD
     subgraph "Intelligent Pre-processing"
         CloudFn -->|"Resample 16kHz"| YAMNet["YAMNet Classifier"]
         YAMNet -->|"Mechanical Check"| Blacklist{"Is it Speech/Music?"}
-        Blacklist -- "Yes" --> Flag["Flag for Gemini Context"]
-        Blacklist -- "No" --> Signal["Signal Extraction"]
+        Blacklist -->|"Yes"| Flag["Flag for Gemini Context"]
+        Blacklist -->|"No"| Signal["Signal Extraction"]
     end
 
     %% AI Fusion
@@ -35,12 +35,12 @@ graph TD
         Storage -->|"Image + Audio Injection"| Fusion
         
         Fusion -->|"Model A: 3.1 Pro"| Result{"Success?"}
-        Result -- "No (503/429)" -->|"Model B: 3.1 Flash"| Result
-        Result -- "No" -->|"Model C: Flash Lite"| Result
+        Result -->|"No (503/429): Try 3.1 Flash"| Result
+        Result -->|"No: Try Flash Lite"| Result
     end
 
     %% Delivery
-    Result -- "Yes" --> Firestore[("Firestore DB")]
+    Result -->|"Yes"| Firestore[("Firestore DB")]
     Firestore -->|"Realtime Update"| User
 ```
 
