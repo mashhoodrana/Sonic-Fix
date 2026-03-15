@@ -15,19 +15,19 @@ The app uses a **Visual-First, Native Audio** pipeline designed for speed and ac
 
 ```mermaid
 graph TD
-    User[Flutter App (Chat UI)] -->|Step 1: Photo| Storage[Firebase Storage]
+    User["Flutter App (Chat UI)"] -->|Step 1: Photo| Storage["Firebase Storage"]
     User -->|Step 2: Audio (5s Clip)| Storage
-    User -->|Step 3: Analyze| CloudFn[Cloud Function (Python)]
+    User -->|Step 3: Analyze| CloudFn["Cloud Function (Python)"]
     
     subgraph "Backend Intelligence"
-    CloudFn -->|Truncate Audio| Opt[Optimization Layer]
-    Opt -->|Try 1: Fast| GemFlash[Gemini 3 Flash Preview]
-    GemFlash -.->|Error 503/429| GemPro[Gemini 3 Pro Preview]
-    GemPro -.->|Error| GemSafe[Gemini 2.0 Flash]
+    CloudFn -->|"Truncate Audio"| Opt["Optimization Layer"]
+    Opt -->|"Try 1: Fast"| GemFlash["Gemini 3 Flash Preview"]
+    GemFlash -.->|"Error 503/429"| GemPro["Gemini 3 Pro Preview"]
+    GemPro -.->|"Error"| GemSafe["Gemini 2.0 Flash"]
     end
     
-    GemFlash -->|Diagnosis JSON| Firestore[(Firestore DB)]
-    Firestore -->|Realtime Update| User
+    GemFlash -->|"Diagnosis JSON"| Firestore[("Firestore DB")]
+    Firestore -->|"Realtime Update"| User
 ```
 
 ### Key Technical Innovations
