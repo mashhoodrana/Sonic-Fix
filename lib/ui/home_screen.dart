@@ -1,12 +1,19 @@
-import 'dart:io';
+import 'dart:io'; // <--- ADDED THIS IMPORT
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../providers/providers.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../providers/providers.dart';
+import '../../providers/auth_provider.dart';
+import '../models/chat_message.dart';
+import 'widgets/app_drawer.dart';
+import 'widgets/user_message_bubble.dart';
+import 'widgets/diagnosis_card_bubble.dart';
 import 'widgets/recording_wave.dart';
-import 'widgets/diagnosis_sheet.dart';
-import 'widgets/gradient_background.dart';
 import 'widgets/progressive_loading.dart';
-import 'widgets/ai_message_bubble.dart';
+import 'widgets/typing_indicator.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -16,11 +23,13 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  final List<Map<String, dynamic>> _messages = [];
+  final List<ChatMessage> _messages = [];
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   
-  // Doctor's Visit Workflow State
-  String? _imagePath;
+  // Pending Input State
+  String? _pendingImagePath;
+  bool _isTyping = false;
 
   @override
   void dispose() {
@@ -44,404 +53,353 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final cameraService = ref.read(cameraServiceProvider);
     final path = await cameraService.takePhoto();
     if (path != null) {
-        setState(() {
-            _imagePath = path;
-            _messages.clear(); // Clear previous session
-            _messages.add({
-                'text': '📸 Image captured! Now, let me hear the machine.',
-                'isUser': false,
-            });
-        });
+      setState(() {
+        _pendingImagePath = path;
+      });
     }
   }
 
-  void _resetWorkflow() {
+  void _resetChat() {
       setState(() {
-          _imagePath = null;
           _messages.clear();
+          _pendingImagePath = null;
+          // Add Welcome Message
+          _messages.add(ChatMessage(
+              id: 'init',
+              isUser: false,
+              text: "Hello! I'm SonicFix, your AI Mechanic. 🛠️\n\nPlease take a photo of the machine, then record the weird sound it's making.",
+              timestamp: DateTime.now()
+          ));
       });
   }
 
   @override
-  Widget build(BuildContext context) {
-    final recordingState = ref.watch(recordingControllerProvider);
+  void initState() {
+      super.initState();
+      // Initial greeting
+      WidgetsBinding.instance.addPostFrameCallback((_) => _resetChat());
+  }
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text(
-          "SonicFix",
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 20,
-          ),
-        ),
-        centerTitle: true,
-        actions: [
-            if (_imagePath != null && !recordingState.isRecording && !recordingState.isProcessing)
-                IconButton(
-                    icon: const Icon(Icons.refresh),
-                    onPressed: _resetWorkflow,
-                    tooltip: "New Diagnosis",
-                )
-        ],
-      ),
-      body: GradientBackground(
-        child: SafeArea(
-          child: Column(
-            children: [
-              // Messages area
-              Expanded(
-                child: _messages.isEmpty && !recordingState.isProcessing
-                    ? _buildEmptyState()
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        itemCount: _messages.length +
-                            (recordingState.isProcessing ? 1 : 0),
-                        itemBuilder: (context, index) {
-                          if (index == _messages.length &&
-                              recordingState.isProcessing) {
-                            return const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 32.0),
-                              child: GeminiStyleLoading(),
-                            );
-                          }
+  Future<void> _handleRecording() async {
+    if (_pendingImagePath == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("📸 Please take a photo first!"))
+        );
+        return;
+    }
 
-                          final message = _messages[index];
-                          return AiMessageBubble(
-                            message: message['text'],
-                            isUser: message['isUser'],
-                            icon: message['isUser'] ? null : Icons.psychology,
-                          );
-                        },
-                      ),
-              ),
+    // Check mic permission
+    var status = await Permission.microphone.request();
+    if (status.isDenied) {
+         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Microphone permission required")));
+         return;
+    }
 
-              // Recording visualization - ONLY show when recording
-              if (recordingState.isRecording)
-                Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
+    final controller = ref.read(recordingControllerProvider.notifier);
+    
+    // START RECORDING
+    await controller.toggleRecording();
+    
+    if (mounted) {
+        // Show Modal Dialog while recording
+        showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+                backgroundColor: Theme.of(context).colorScheme.surface,
+                title: const Text("Listening..."),
+                content: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      RecordingWave(isRecording: true),
-                      const SizedBox(height: 16),
-                      Text(
-                        "Listening to Machine...",
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  color: Theme.of(context).colorScheme.primary,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        "Tap stop when ready to analyze",
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withValues(alpha: 0.6),
-                            ),
-                      ),
+                        const SizedBox(height: 20),
+                        const SizedBox(
+                            height: 100,
+                            child: RecordingWave(isRecording: true)
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                            "Recording Machine Sound...", 
+                            style: TextStyle(color: Theme.of(context).colorScheme.primary)
+                        ),
                     ],
-                  ),
                 ),
-
-              // Bottom action area
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .surface
-                      .withValues(alpha: 0.8),
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(32)),
-                  border: Border(
-                    top: BorderSide(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.2),
-                    ),
-                  ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                     // Workflow Logic
-                     if (_imagePath == null) ...[
-                         // STEP 1: TAKE PHOTO
-                         Text(
-                            "Step 1: Identify Machine",
-                            style: Theme.of(context).textTheme.titleMedium,
-                         ),
-                         const SizedBox(height: 8),
-                         Text(
-                            "SonicFix needs to see what we're fixing first.",
-                             style: Theme.of(context).textTheme.bodySmall,
-                         ),
-                         const SizedBox(height: 16),
-                         GestureDetector(
-                             onTap: _takePhoto,
-                             child: Container(
-                                 padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                                 decoration: BoxDecoration(
-                                     color: Theme.of(context).colorScheme.primary,
-                                     borderRadius: BorderRadius.circular(30),
-                                     boxShadow: [
-                                         BoxShadow(
-                                             color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-                                             blurRadius: 10,
-                                             offset: const Offset(0, 4),
-                                         )
-                                     ]
-                                 ),
-                                 child: Row(
-                                     mainAxisSize: MainAxisSize.min,
-                                     children: const [
-                                         Icon(Icons.camera_alt, color: Colors.white),
-                                         SizedBox(width: 8),
-                                         Text("Take Photo", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                     ],
-                                 ),
-                             ),
-                         )
-                     ] else ...[
-                         // STEP 2: RECORD AUDIO
-                         if (!recordingState.isRecording && !recordingState.isProcessing) ...[
-                             Row(
-                                 mainAxisAlignment: MainAxisAlignment.center,
-                                 children: [
-                                     Container(
-                                         width: 40, height: 40,
-                                         margin: const EdgeInsets.only(right: 12),
-                                         decoration: BoxDecoration(
-                                             borderRadius: BorderRadius.circular(8),
-                                             border: Border.all(color: Colors.grey),
-                                             image: DecorationImage(
-                                                 image: FileImage(File(_imagePath!)),
-                                                 fit: BoxFit.cover,
-                                             )
-                                         ),
-                                     ),
-                                     const Text("✅ Photo Attached"),
-                                 ],
-                             ),
-                             const SizedBox(height: 16),
-                             const Text("Step 2: Record Sound"),
-                             const SizedBox(height: 16),
-                         ],
-                         
-                        _buildRecordButton(recordingState),
-                     ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+                actions: [
+                    TextButton.icon(
+                        icon: const Icon(Icons.stop_circle_outlined),
+                        label: const Text("STOP & ANALYZE"),
+                        onPressed: () async {
+                            // CRITICAL FIX: Close dialog first
+                            Navigator.pop(ctx); 
+                            
+                            debugPrint("--- Recording Step: STOPPING ---");
+                            // Stop recording logic
+                            await controller.toggleRecording(); 
+                            
+                            // Small delay to ensure file is closed by system
+                            await Future.delayed(const Duration(milliseconds: 500));
+                            
+                            // Process
+                            _processRecording();
+                        },
+                        style: TextButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            textStyle: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                    )
+                ],
+            )
+        );
+    }
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 120,
-            height: 120,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Theme.of(context).colorScheme.primary,
-                width: 3,
-              ),
-            ),
-            child: ClipOval(
-              child: Image.asset(
-                'assets/sonicfix.jpg',
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Theme.of(context).colorScheme.primary,
-                          Theme.of(context).colorScheme.secondary,
-                        ],
-                      ),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.auto_fix_high,
-                      size: 60,
-                      color: Colors.white,
-                    ),
+  Future<void> _processRecording() async {
+      final recordingState = ref.read(recordingControllerProvider);
+      
+      if (recordingState.path != null && _pendingImagePath != null) {
+          final userAudioPath = recordingState.path!;
+          final userImagePath = _pendingImagePath!; // Capture local var
+
+          // 1. Add User Message
+          final userMsg = ChatMessage(
+              id: DateTime.now().toString(),
+              isUser: true,
+              imagePath: userImagePath,
+              audioPath: userAudioPath,
+              timestamp: DateTime.now(),
+          );
+          
+          setState(() {
+              _messages.add(userMsg);
+              _pendingImagePath = null; // Clear pending
+              _isTyping = true; // Show loading bubble
+          });
+          _scrollToBottom();
+          
+          // 2. VERIFY FILE SIZE
+          try {
+              final file = File(userAudioPath);
+              if (await file.exists()) {
+                  final size = await file.length();
+                  debugPrint("--- Audio File Verified: ${size} bytes ---");
+                  if (size == 0) {
+                      throw Exception("Recording is empty. Please check your microphone permissions and try again.");
+                  }
+              } else {
+                  throw Exception("Audio file not found at $userAudioPath");
+              }
+          } catch (e) {
+              debugPrint("--- Recording Error: $e ---");
+              setState(() => _isTyping = false);
+              if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("⚠️ $e"), backgroundColor: Colors.red)
                   );
-                },
-              ),
-            ),
-          ),
-          const SizedBox(height: 32),
-          Text(
-            "SonicFix Doctor",
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
+              }
+              return;
+          }
+          
+          try {
+               // 3. Call API
+               debugPrint("--- Starting API Analysis ---");
+               final result = await ref.read(recordingControllerProvider.notifier).analyze(imagePath: userImagePath);
+               
+               if (result != null) {
+                   // 3. Add AI Response
+                   final aiMsg = ChatMessage(
+                       id: DateTime.now().toString(),
+                       isUser: false,
+                       diagnosisData: result,
+                       timestamp: DateTime.now(),
+                   );
+                   
+                   setState(() {
+                       _messages.add(aiMsg);
+                       _isTyping = false;
+                   });
+                   _scrollToBottom();
+                   
+                   // SAVE TO FIRESTORE
+                   final user = ref.read(currentUserProvider);
+                   if (user != null) {
+                       FirebaseFirestore.instance
+                           .collection('users')
+                           .doc(user.uid)
+                           .collection('history')
+                           .add({
+                               'timestamp': FieldValue.serverTimestamp(),
+                               'diagnosis': result,
+                               'imagePath': userImagePath, // Note: Local path only suitable for same device
+                               'audioPath': userAudioPath,
+                           });
+                   }
+               }
+           } catch (e) {
+               setState(() => _isTyping = false);
+               if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+           }
+      }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      key: _scaffoldKey,
+      appBar: AppBar(
+        title: const Text("SonicFix AI", style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        leading: IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+        actions: [
+            IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _resetChat,
+                tooltip: "New Chat",
+            )
+        ],
+      ),
+      drawer: AppDrawer(
+          onNewDiagnosis: _resetChat,
+      ),
+      body: Column(
+        children: [
+            // CHAT LIST
+            Expanded(
+                child: ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.only(bottom: 20),
+                    itemCount: _messages.length + (_isTyping ? 1 : 0),
+                    itemBuilder: (context, index) {
+                        if (index == _messages.length) {
+                             return const Padding(
+                                 padding: EdgeInsets.all(16),
+                                 child: TypingIndicator(),
+                             );
+                        }
+                        
+                        final msg = _messages[index];
+                        if (msg.isUser) {
+                            return UserMessageBubble(message: msg);
+                        } else {
+                            if (msg.text != null) {
+                                // Simple text message (Welcome)
+                                return Container(
+                                    padding: const EdgeInsets.all(16),
+                                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                    decoration: BoxDecoration(
+                                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                        borderRadius: const BorderRadius.only(
+                                            topLeft: Radius.circular(20),
+                                            topRight: Radius.circular(20),
+                                            bottomRight: Radius.circular(20),
+                                            bottomLeft: Radius.circular(4),
+                                        )
+                                    ),
+                                    child: Text(msg.text!),
+                                );
+                            }
+                            return DiagnosisCardBubble(diagnosis: msg.diagnosisData!);
+                        }
+                    },
                 ),
-          ),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 48),
-            child: Text(
-              "Let's check your machine.\nFirst, I need to see it.",
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.7),
-                  ),
             ),
-          ),
+            
+            // INPUT AREA
+            Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surface,
+                    boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            blurRadius: 10,
+                            offset: const Offset(0, -2)
+                        )
+                    ]
+                ),
+                child: SafeArea(
+                    child: Column(
+                        children: [
+                            // Pending Image Preview
+                            if (_pendingImagePath != null)
+                                Container(
+                                    margin: const EdgeInsets.only(bottom: 12),
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                        borderRadius: BorderRadius.circular(12)
+                                    ),
+                                    child: Row(
+                                        children: [
+                                            ClipRRect(
+                                                borderRadius: BorderRadius.circular(8),
+                                                child: Image.file(
+                                                    File(_pendingImagePath!), // NOW FIXED WITH IMPORT
+                                                    width: 50, height: 50,
+                                                    fit: BoxFit.cover,
+                                                ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            const Expanded(child: Text("Photo Ready! Tap microphone to record.")),
+                                            IconButton(
+                                                icon: const Icon(Icons.close),
+                                                onPressed: () => setState(() => _pendingImagePath = null),
+                                            )
+                                        ],
+                                    ),
+                                ),
+                            
+                            // Input Controls
+                            Row(
+                                children: [
+                                    // Camera Button
+                                    IconButton.filledTonal(
+                                        onPressed: _takePhoto,
+                                        icon: const Icon(Icons.camera_alt),
+                                        iconSize: 24,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    
+                                    // Record Button (Center, Expanded)
+                                    Expanded(
+                                        child: GestureDetector(
+                                            onTap: _handleRecording,
+                                            child: Container(
+                                                height: 50,
+                                                decoration: BoxDecoration(
+                                                    color: _pendingImagePath == null 
+                                                        ? Colors.grey 
+                                                        : Theme.of(context).colorScheme.primary,
+                                                    borderRadius: BorderRadius.circular(25),
+                                                ),
+                                                child: Row(
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    children: [
+                                                        const Icon(Icons.mic, color: Colors.white),
+                                                        const SizedBox(width: 8),
+                                                        Text(
+                                                            _pendingImagePath == null 
+                                                                ? "Take Photo First" 
+                                                                : "Hold / Tap to Record",
+                                                            style: const TextStyle(
+                                                                color: Colors.white,
+                                                                fontWeight: FontWeight.bold
+                                                            )
+                                                        )
+                                                    ],
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                ),
+            )
         ],
       ),
     );
-  }
-
-  Widget _buildRecordButton(RecordingState recordingState) {
-    return GestureDetector(
-      onTap: recordingState.isProcessing
-          ? null
-          : () async {
-              final controller = ref.read(recordingControllerProvider.notifier);
-              final scaffoldMessenger = ScaffoldMessenger.of(context);
-
-              if (!recordingState.isRecording) {
-                // START RECORDING
-                await controller.toggleRecording();
-
-                setState(() {
-                  _messages.add({
-                    'text': '🎤 Listening for mechanical faults...',
-                    'isUser': true,
-                  });
-                });
-                _scrollToBottom();
-              } else {
-                // STOP AND ANALYZE
-                await controller.toggleRecording();
-
-                if (ref.read(recordingControllerProvider).path != null) {
-                  try {
-                    // PASS IMAGE PATH HERE
-                    final result = await controller.analyze(imagePath: _imagePath);
-                    
-                    if (result != null && result['valid'] == false) {
-                        if (context.mounted) {
-                            showDialog(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text("Analysis Paused"),
-                                content: Text(result['error'] ?? "Sound rejected."),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    child: const Text("OK"),
-                                  ),
-                                ],
-                              ),
-                            );
-                        }
-                    } else if (result != null && context.mounted) {
-                        ref.read(diagnosisResultProvider.notifier).setDiagnosis(result);
-                        
-                        setState(() {
-                          _messages.add({
-                            'text': _formatDiagnosisMessage(result),
-                            'isUser': false,
-                          });
-                        });
-                        _scrollToBottom();
-
-                        Future.delayed(const Duration(milliseconds: 500), () {
-                          if (context.mounted) {
-                            showModalBottomSheet(
-                              context: context,
-                              isScrollControlled: true,
-                              backgroundColor: Colors.transparent,
-                              builder: (context) => DiagnosisSheet(diagnosis: result),
-                            );
-                          }
-                        });
-                    }
-                  } catch (e) {
-                    scaffoldMessenger.showSnackBar(
-                      SnackBar(
-                        content: Text("Error: $e"),
-                        backgroundColor: Theme.of(context).colorScheme.error,
-                      ),
-                    );
-                  }
-                }
-              }
-            },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        width: 80,
-        height: 80,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: recordingState.isRecording
-                ? [Colors.red, Colors.red.withValues(red: 0.7)]
-                : [
-                    Theme.of(context).colorScheme.primary,
-                    Theme.of(context).colorScheme.secondary,
-                  ],
-          ),
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: (recordingState.isRecording
-                      ? Colors.red
-                      : Theme.of(context).colorScheme.primary)
-                  .withValues(alpha: 0.4),
-              blurRadius: 20,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-        child: Icon(
-          recordingState.isRecording ? Icons.stop : Icons.mic,
-          size: 36,
-          color: Colors.white,
-        ),
-      ),
-    );
-  }
-
-  String _formatDiagnosisMessage(Map<String, dynamic> diagnosis) {
-    // Show visual evidence if available
-    final machine = diagnosis['machine_detected'] ?? 'Unknown Machine';
-    final problem = diagnosis['problem'] ?? 'Unknown Issue';
-    final severity = diagnosis['severity'] ?? 'Unknown';
-    final cost = diagnosis['estimated_cost'] ?? 'N/A';
-
-    String severityEmoji = severity.toString().toLowerCase() == 'high'
-        ? '🔴'
-        : severity.toString().toLowerCase() == 'medium'
-            ? '🟡'
-            : '🟢';
-
-    return '✅ Diagnosis Complete!\n\n'
-        '👀 I see: $machine\n'
-        '$severityEmoji Failure: $problem\n\n'
-        '💰 Est. Cost: $cost\n'
-        'Tap for details →';
   }
 }

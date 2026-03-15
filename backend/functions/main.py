@@ -216,12 +216,13 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
 
         # Generate Response (With Priority Fallback Strategy)
         response = None
+        diagnosis_json = None
+        successful_model = "Unknown"
         
-        # User Strategy: "Use Gemini 3 models, fallback if fails"
         PRIORITY_MODELS = [
-            'gemini-3-flash-preview',  # First Choice: Latest & Fast
-            'gemini-3-pro-preview',    # Fallback 1: More Powerful 
-            'gemini-2.0-flash'         # Safety Net: Proven Stable
+            'gemini-3.1-pro-preview',         
+            'gemini-3-flash-preview',         
+            'gemini-3.1-flash-lite-preview'   
         ]
         
         last_error = None
@@ -239,6 +240,7 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
                 if response:
                     print(f"SUCCESS: Analysis completed using {model_name}")
                     diagnosis_json = json.loads(response.text) # Validate JSON immediately
+                    successful_model = model_name
                     break # Stop if successful
                     
             except Exception as e:
@@ -280,7 +282,7 @@ def analyze_audio(req: https_fn.Request) -> https_fn.Response:
             "file_path": file_path,
             "diagnosis": diagnosis_json,
             "timestamp": firestore.SERVER_TIMESTAMP,
-            "model": f"{model_name}+yamnet-fusion" 
+            "model": f"{successful_model}+yamnet-fusion" # Winning model
         })
         
         print(f"Diagnosis Complete: {diagnosis_json['problem']}")

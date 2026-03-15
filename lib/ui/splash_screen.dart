@@ -36,7 +36,7 @@ class _SplashScreenState extends State<SplashScreen>
     // Navigate to home after 2.5 seconds
     Timer(const Duration(milliseconds: 2500), () {
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/home');
+        Navigator.of(context).pushReplacementNamed('/auth_wrapper');
       }
     });
   }

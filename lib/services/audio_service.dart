@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
@@ -30,6 +31,7 @@ class AudioService {
       final path = '${directory.path}/$fileName';
 
       // Start recording to file
+      debugPrint("--- AudioService: Starting record to $path ---");
       await _recorder.start(const RecordConfig(encoder: AudioEncoder.wav),
           path: path);
       return path;

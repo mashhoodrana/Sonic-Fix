@@ -187,9 +187,9 @@ class DiagnosisSheet extends ConsumerWidget {
                       Expanded(
                         child: _buildInfoCard(
                           context,
-                          icon: Icons.attach_money_rounded,
+                          icon: Icons.account_balance_wallet_rounded,
                           label: 'Estimated Cost',
-                          value: cost,
+                          value: cost.toString().replaceAll('\$', ''),
                           color: Theme.of(context).colorScheme.primary,
                         ),
                       ),
