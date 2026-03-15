@@ -13,6 +13,7 @@
 
 The app uses a **Visual-First, Native Audio** pipeline designed for speed and accuracy.
 
+```mermaid
 graph TD
     User["Flutter App (Chat UI)"] -->|"Step 1: Photo"| Storage["Firebase Storage"]
     User -->|"Step 2: Audio (5s Clip)"| Storage
@@ -21,12 +22,13 @@ graph TD
     subgraph "Backend Intelligence"
     CloudFn -->|"Truncate Audio"| Opt["Optimization Layer"]
     Opt -->|"Try 1: Fast"| GemFlash["Gemini 3 Flash Preview"]
-    GemFlash -.->|"Error 503/429"| GemPro["Gemini 3 Pro Preview"]
-    GemPro -.->|"Error"| GemSafe["Gemini 2.0 Flash"]
+    GemFlash -.->|"Error 503/429"| GemPro["Gemini 3.1 Pro Preview"]
+    GemPro -.->|"Error"| GemSafe["Gemini 3.1 Flash Lite Preview"]
     end
     
     GemFlash -->|"Diagnosis JSON"| Firestore[("Firestore DB")]
     Firestore -->|"Realtime Update"| User
+```
 
 ### Key Technical Innovations
 1.  **Gemini 3 Native Audio**: Instead of converting audio to text (which loses texture), we upload the raw audio file directly to Gemini 3, allowing it to "hear" grinding, hissing, or knocking.
